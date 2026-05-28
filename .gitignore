@@ -1,0 +1,24 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
+env/
+
+# IDE configurations
+.vscode/
+.idea/
+.DS_Store
+
+# Local application data
+data/
+.env
+
+# Poetry/Pipenv lock files if not wanted (we keep them if needed, but requirements.txt is standard)
+poetry.lock

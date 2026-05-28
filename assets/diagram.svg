@@ -1,0 +1,264 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 680 880"
+  width="2040" height="2640"
+  role="img"
+  style="font-family: 'Inter', 'Segoe UI', sans-serif; background: #0f1117;">
+
+  <title>PRJ-03 RAG Agêntico (ReAct) — GIULIA AI Engineering Ecosystem</title>
+  <desc>Pipeline RAG Agêntico baseada no padrão ReAct com Guardrail pré-LLM: PDF → ChromaDB → AgenticEngine → ReAct Agent → Ollama</desc>
+
+  <defs>
+    <!-- Arrow marker -->
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="var(--arr-color, #4a5568)"/>
+    </marker>
+
+    <!-- Glow filter for central node -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #161b27;
+      --border-primary: rgba(255,255,255,0.15);
+      --border-secondary: rgba(255,255,255,0.08);
+      --border-tertiary: rgba(255,255,255,0.05);
+      --text-primary: #e8eaf0;
+      --text-secondary: #8892a4;
+    }
+
+    .th {
+      fill: #e8eaf0;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .ts {
+      fill: #8892a4;
+      font-size: 10px;
+      font-weight: 400;
+    }
+    .arr {
+      stroke-width: 1.2;
+      fill: none;
+    }
+
+    /* Node colors following standard convention */
+    .c-gray  rect { fill: #1e2330; stroke: rgba(148,163,184,0.4); }
+    .c-teal  rect { fill: #0d2d2d; stroke: rgba( 45,212,191,0.45); }
+    .c-purple rect { fill: #1e1530; stroke: rgba(139,92, 246,0.5); }
+    .c-blue  rect { fill: #0d1e3d; stroke: rgba( 59,130,246,0.6); }
+    .c-amber rect { fill: #2d1f00; stroke: rgba(245,158, 11,0.5); }
+    .c-coral rect { fill: #2d1010; stroke: rgba(239, 68, 68,0.5); }
+    .c-green rect { fill: #0d2d1a; stroke: rgba( 34,197, 94,0.5); }
+
+    .c-gray  .th { fill: #94a3b8; }
+    .c-teal  .th { fill: #2dd4bf; }
+    .c-purple .th { fill: #a78bfa; }
+    .c-blue  .th { fill: #60a5fa; }
+    .c-amber .th { fill: #fbbf24; }
+    .c-coral .th { fill: #f87171; }
+    .c-green .th { fill: #4ade80; }
+
+    /* Nodes styling without cursor pointer since it's static */
+    .node rect { stroke-width: 0.5; }
+
+    /* Arrow colors per flow */
+    .arr-gray   { stroke: rgba(148,163,184,0.4); }
+    .arr-teal   { stroke: rgba( 45,212,191,0.4); }
+    .arr-purple { stroke: rgba(139, 92,246,0.4); }
+    .arr-blue   { stroke: rgba( 59,130,246,0.5); }
+    .arr-green  { stroke: rgba( 34,197, 94,0.4); }
+
+    /* Phase labels */
+    .phase-label {
+      fill: rgba(255,255,255,0.3);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+  </style>
+
+  <!-- BACKGROUND PANEL -->
+  <rect width="680" height="880" fill="#0f1117"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="680" height="56" fill="#0d1117"/>
+  <text x="340" y="24" text-anchor="middle" dominant-baseline="central"
+    font-size="13" font-weight="700" fill="#e8eaf0">
+    PRJ-03 · RAG Agêntico Investigativo (ReAct)
+  </text>
+  <text x="340" y="44" text-anchor="middle" dominant-baseline="central"
+    font-size="10" fill="#4ade80" letter-spacing="2">
+    REACT PATTERN · PRE-LLM GUARDRAIL · GIULIA AI ECOSYSTEM
+  </text>
+
+  <!-- ══════════════════════════════════════════════════
+       FASE 1: INGESTÃO & INDEXAÇÃO
+  ══════════════════════════════════════════════════ -->
+  <text class="phase-label" x="40" y="88">INGESTÃO &amp; INDEXAÇÃO</text>
+  <line x1="40" y1="96" x2="640" y2="96" stroke="rgba(255,255,255,0.05)" stroke-width="0.5" stroke-dasharray="4 4"/>
+
+  <!-- Node: PDF Ingestion -->
+  <g class="node c-amber">
+    <rect x="40" y="110" width="160" height="52" rx="8"/>
+    <text class="th" x="120" y="130" text-anchor="middle" dominant-baseline="central">📄 PDF Ingestion</text>
+    <text class="ts" x="120" y="149" text-anchor="middle" dominant-baseline="central">PyMuPDFLoader</text>
+  </g>
+
+  <!-- Arrow: Ingest → Splitter -->
+  <line x1="200" y1="136" x2="238" y2="136" class="arr arr-gray" marker-end="url(#arrow)"/>
+
+  <!-- Node: RecursiveTextSplitter -->
+  <g class="node c-teal">
+    <rect x="240" y="110" width="180" height="52" rx="8"/>
+    <text class="th" x="330" y="130" text-anchor="middle" dominant-baseline="central">RecursiveTextSplitter</text>
+    <text class="ts" x="330" y="149" text-anchor="middle" dominant-baseline="central">Chunk 1000 · Overlap 100</text>
+  </g>
+
+  <!-- Arrow: Splitter → Vectorstore -->
+  <line x1="420" y1="136" x2="458" y2="136" class="arr arr-teal" marker-end="url(#arrow)"/>
+
+  <!-- Node: ChromaDB -->
+  <g class="node c-purple">
+    <rect x="460" y="110" width="180" height="52" rx="8"/>
+    <text class="th" x="550" y="130" text-anchor="middle" dominant-baseline="central">🗄️ ChromaDB</text>
+    <text class="ts" x="550" y="149" text-anchor="middle" dominant-baseline="central">Local Vector Store</text>
+  </g>
+
+  <!-- ══════════════════════════════════════════════════
+       FASE 2: GUARDRAIL & ENTRADA DE USUÁRIO
+  ══════════════════════════════════════════════════ -->
+  <line x1="40" y1="228" x2="640" y2="228" stroke="rgba(255,255,255,0.05)" stroke-width="0.5" stroke-dasharray="4 4"/>
+  <text class="phase-label" x="40" y="220">GUARDRAIL E ORQUESTRADOR PRÉ-LLM</text>
+
+  <!-- Node: User Query -->
+  <g class="node c-amber">
+    <rect x="40" y="248" width="160" height="52" rx="8"/>
+    <text class="th" x="120" y="268" text-anchor="middle" dominant-baseline="central">🙋 User + Session ID</text>
+    <text class="ts" x="120" y="287" text-anchor="middle" dominant-baseline="central">Streamlit UI / FastAPI</text>
+  </g>
+
+  <!-- Arrow: User → Guardrail -->
+  <line x1="200" y1="274" x2="238" y2="274" class="arr arr-gray" marker-end="url(#arrow)"/>
+
+  <!-- Node: pre-LLM Python Guardrail -->
+  <g class="node c-blue">
+    <rect x="240" y="248" width="220" height="52" rx="8"/>
+    <text class="th" x="350" y="268" text-anchor="middle" dominant-baseline="central">🛡️ Guardrail Python (pré-LLM)</text>
+    <text class="ts" x="350" y="287" text-anchor="middle" dominant-baseline="central">Valida presença de tokens nos docs</text>
+  </g>
+
+  <!-- Arrow: Guardrail ↔ Vector DB Check -->
+  <line x1="350" y1="248" x2="350" y2="210" class="arr arr-blue" stroke-dasharray="3 3"/>
+  <path d="M 350 210 L 550 210 L 550 162" class="arr arr-blue"/>
+
+  <!-- Arrow: Guardrail blocks -> WEB_SIGNAL -->
+  <path d="M 350 300 L 350 338" class="arr arr-green" marker-end="url(#arrow)"/>
+  <text class="ts" x="360" y="320" text-anchor="start" fill="#f87171">Nenhum termo localizado nos docs</text>
+
+  <!-- Node: WEB_SIGNAL Block -->
+  <g class="node c-teal">
+    <rect x="240" y="340" width="220" height="52" rx="8"/>
+    <text class="th" x="350" y="360" text-anchor="middle" dominant-baseline="central">⚠️ WEB_SIGNAL Trigger</text>
+    <text class="ts" x="350" y="379" text-anchor="middle" dominant-baseline="central">__SOLICITAR_BUSCA_WEB__</text>
+  </g>
+
+  <!-- Arrow: WEB_SIGNAL back to User -->
+  <path d="M 240 366 L 120 366 L 120 300" class="arr arr-gray" marker-end="url(#arrow)"/>
+
+  <!-- ══════════════════════════════════════════════════
+       FASE 3: LOOP REACT & TOOLS
+  ══════════════════════════════════════════════════ -->
+  <line x1="40" y1="440" x2="640" y2="440" stroke="rgba(255,255,255,0.05)" stroke-width="0.5" stroke-dasharray="4 4"/>
+  <text class="phase-label" x="40" y="432">LOOP REACT E FERRAMENTAS DO AGENTE</text>
+
+  <!-- Node: ReAct Agent Executor -->
+  <g class="node c-blue" filter="url(#glow)">
+    <rect x="210" y="460" width="260" height="72" rx="10" stroke-width="1.5"/>
+    <text class="th" x="340" y="482" text-anchor="middle" dominant-baseline="central" font-size="13">⚙️ ReAct Agent (AgentExecutor)</text>
+    <text class="ts" x="340" y="502" text-anchor="middle" dominant-baseline="central">max_iterations=5 · handle_parsing_errors</text>
+    <text class="ts" x="340" y="519" text-anchor="middle" dominant-baseline="central">Decide qual ferramenta usar dinamicamente</text>
+  </g>
+
+  <!-- Arrow: Guardrail OK -> ReAct Agent -->
+  <path d="M 460 274 L 660 274 L 660 496 L 470 496" class="arr arr-blue" marker-end="url(#arrow)"/>
+  <text class="ts" x="655" y="380" text-anchor="end" opacity="0.6">Tokens encontrados / Busca Web Autorizada</text>
+
+  <!-- Arrow: ReAct Agent to Tools -->
+  <line x1="340" y1="532" x2="340" y2="570" class="arr arr-purple" marker-end="url(#arrow)"/>
+
+  <!-- Node: doc_retriever Tool -->
+  <g class="node c-purple">
+    <rect x="40" y="574" width="170" height="52" rx="8"/>
+    <text class="th" x="125" y="594" text-anchor="middle" dominant-baseline="central">📚 doc_retriever</text>
+    <text class="ts" x="125" y="613" text-anchor="middle" dominant-baseline="central">MMR k=4, fetch_k=8</text>
+  </g>
+
+  <!-- Node: math_tool Tool -->
+  <g class="node c-purple">
+    <rect x="230" y="574" width="220" height="52" rx="8"/>
+    <text class="th" x="340" y="594" text-anchor="middle" dominant-baseline="central">🧮 math_tool</text>
+    <text class="ts" x="340" y="613" text-anchor="middle" dominant-baseline="central">Calculadora via NumExpr</text>
+  </g>
+
+  <!-- Node: web_search Tool -->
+  <g class="node c-purple">
+    <rect x="470" y="574" width="170" height="52" rx="8"/>
+    <text class="th" x="555" y="594" text-anchor="middle" dominant-baseline="central">🌐 web_search</text>
+    <text class="ts" x="555" y="613" text-anchor="middle" dominant-baseline="central">DuckDuckGo Search</text>
+  </g>
+
+  <!-- Feedback arrows from tools back to Agent -->
+  <path d="M 125 574 L 125 496 L 210 496" class="arr arr-purple" stroke-dasharray="3 3"/>
+  <path d="M 555 574 L 555 496 L 470 496" class="arr arr-purple" stroke-dasharray="3 3"/>
+
+  <!-- ══════════════════════════════════════════════════
+       FASE 4: GERAÇÃO & INFERÊNCIA
+  ══════════════════════════════════════════════════ -->
+  <line x1="40" y1="656" x2="640" y2="656" stroke="rgba(255,255,255,0.05)" stroke-width="0.5" stroke-dasharray="4 4"/>
+  <text class="phase-label" x="40" y="648">GERAÇÃO E INFERÊNCIA</text>
+
+  <!-- Node: ChatOllama model -->
+  <g class="node c-coral">
+    <rect x="230" y="676" width="220" height="52" rx="8"/>
+    <text class="th" x="340" y="696" text-anchor="middle" dominant-baseline="central">🦙 ChatOllama (llama3.2:3b)</text>
+    <text class="ts" x="340" y="715" text-anchor="middle" dominant-baseline="central">Instruction-Following · Temp: 0</text>
+  </g>
+
+  <!-- Arrow: Agent → LLM -->
+  <path d="M 340 532 L 340 676" class="arr arr-coral"/>
+
+  <!-- Arrow: LLM → Agent -->
+  <path d="M 360 676 L 360 532" class="arr arr-coral" stroke-dasharray="2 2"/>
+
+  <!-- Node: Final Answer -->
+  <g class="node c-green">
+    <rect x="130" y="748" width="420" height="52" rx="8"/>
+    <text class="th" x="340" y="768" text-anchor="middle" dominant-baseline="central">✅ Resposta Investigativa + Fontes Citadas</text>
+    <text class="ts" x="340" y="787" text-anchor="middle" dominant-baseline="central">Retorna reasoning_steps detalhados + citações de fontes 📚</text>
+  </g>
+
+  <!-- Arrow: Agent → Answer -->
+  <path d="M 210 510 L 10 510 L 10 774 L 130 774" class="arr arr-green" marker-end="url(#arrow)"/>
+
+  <!-- ══════════════════════════════════════════════════
+       FOOTER — METRICS
+  ══════════════════════════════════════════════════ -->
+  <rect x="40" y="816" width="600" height="30" rx="6"
+    fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="0.5"/>
+  <text class="ts" x="340" y="831" text-anchor="middle" dominant-baseline="central" opacity="0.7">
+    Métricas Reais: 13 arquivos Python · 965 linhas · 6 testes pytest OK (0.09s) · Epic GARE-46 Done
+  </text>
+
+  <!-- Bottom gap -->
+  <rect x="0" y="854" width="680" height="26" fill="#0d1117"/>
+  <text x="340" y="867" text-anchor="middle" dominant-baseline="central"
+    font-size="9" fill="rgba(255,255,255,0.2)" letter-spacing="1">
+    github.com/wganalytics · RAG Agêntico ReAct · Local-first
+  </text>
+</svg>

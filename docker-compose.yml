@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  # Servidor Redis Cache para persistência de sessão do Agente
+  redis:
+    image: redis:7.2-alpine
+    container_name: giulia-rag-agentic-redis
+    command: redis-server --port 6380
+    ports:
+      - "6380:6380"
+    volumes:
+      - redis_data:/data
+    restart: always
+
+volumes:
+  redis_data:
