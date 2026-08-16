@@ -49,7 +49,7 @@ sys.modules['langchain_community.tools'] = mock_ddg
 from langchain_core.documents import Document
 
 # Agora importamos o AgenticEngine de forma limpa e rápida!
-from src.core.agent_engine import AgenticEngine, WEB_SIGNAL
+from src.core.agent_engine import AgenticEngine, WEB_SIGNAL, get_engine
 
 @pytest.fixture
 def mock_agentic_engine():
@@ -87,6 +87,80 @@ def test_singleton_pattern():
     engine2 = AgenticEngine()
     assert engine1 is engine2
     assert id(engine1) == id(engine2)
+
+
+# ──────────────────────────────────────────────────────────────
+# SELEÇÃO DE PROVIDER (ollama / gemini / grok / groq)
+# ──────────────────────────────────────────────────────────────
+
+def test_motores_de_providers_diferentes_sao_instancias_distintas():
+    """Trocar de provider não pode devolver o motor antigo com o LLM antigo."""
+    AgenticEngine._instance = None
+    with patch('src.core.agent_engine.get_llm') as mock_get_llm:
+        eng_ollama = AgenticEngine(provider="ollama", model="llama3.2:3b")
+        eng_groq = AgenticEngine(provider="groq", model="llama-3.3-70b-versatile")
+
+        assert eng_ollama is not eng_groq
+        assert eng_ollama.provider == "ollama"
+        assert eng_groq.provider == "groq"
+        assert eng_groq.model_name == "llama-3.3-70b-versatile"
+        # Um motor construído por provider, nenhum reaproveitado indevidamente.
+        assert mock_get_llm.call_count == 2
+
+
+def test_mesmo_provider_e_modelo_reaproveita_o_motor():
+    """Montar o agente é caro: a mesma combinação não pode reconstruir tudo."""
+    AgenticEngine._instance = None
+    with patch('src.core.agent_engine.get_llm') as mock_get_llm:
+        primeiro = AgenticEngine(provider="gemini", model="gemini-2.5-flash")
+        segundo = AgenticEngine(provider="gemini", model="gemini-2.5-flash")
+
+        assert primeiro is segundo
+        assert mock_get_llm.call_count == 1
+
+
+def test_modelos_diferentes_no_mesmo_provider_sao_motores_distintos():
+    AgenticEngine._instance = None
+    with patch('src.core.agent_engine.get_llm'):
+        pequeno = AgenticEngine(provider="ollama", model="llama3.2:3b")
+        grande = AgenticEngine(provider="ollama", model="qwen3.5:35b")
+
+        assert pequeno is not grande
+        assert grande.model_name == "qwen3.5:35b"
+
+
+def test_get_engine_repassa_provider():
+    AgenticEngine._instance = None
+    with patch('src.core.agent_engine.get_llm') as mock_get_llm:
+        eng = get_engine(provider="grok", model="grok-4-latest")
+
+        assert eng.provider == "grok"
+        mock_get_llm.assert_called_once_with("grok", "grok-4-latest", temperature=0)
+
+
+def test_resposta_declara_quem_respondeu(mock_agentic_engine):
+    """A resposta precisa dizer qual provider/modelo a produziu (rastreabilidade)."""
+    engine, vs = mock_agentic_engine
+    engine.agent_executor.invoke.return_value = {"output": "resposta", "intermediate_steps": []}
+
+    resposta = engine.investigate("sim, pode pesquisar", session_id="s1")
+
+    assert resposta["provider"] == engine.provider
+    assert resposta["model"] == engine.model_name
+
+
+def test_guardrail_tambem_declara_provider(mock_agentic_engine):
+    """Mesmo bloqueando antes do LLM, a resposta identifica o motor ativo."""
+    engine, vs = mock_agentic_engine
+    vs._collection.count.return_value = 5
+    mock_retriever = MagicMock()
+    mock_retriever.invoke.return_value = [Document(page_content="Assunto totalmente diferente.")]
+    vs.as_retriever.return_value = mock_retriever
+
+    resposta = engine.investigate("O que é Kubernetes?", session_id="s2")
+
+    assert WEB_SIGNAL in resposta["answer"]
+    assert resposta["provider"] == engine.provider
 
 def test_web_signal_constant():
     """Garante que o contrato do WEB_SIGNAL entre frontend e backend é estável."""

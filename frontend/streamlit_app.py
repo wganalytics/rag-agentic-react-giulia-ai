@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import requests
 import time
@@ -80,7 +81,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-API_URL = "http://localhost:8002"
+# Em container a API vive noutro host: o padrao preserva o uso local.
+API_URL = os.getenv("API_URL", "http://localhost:8002")
 
 # Inicialização de estado
 if "session_id" not in st.session_state:
@@ -92,6 +94,126 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.title("🕵️ Investigador")
     st.subheader("Configurações")
+
+    # ── Seleção do LLM de raciocínio ──────────────────────────────
+    # A lista vem da API (/providers), que sabe quais estão prontos.
+    SUGESTOES = {
+        "sem_credito": "Adicione crédito no painel do provider — a chave está correta.",
+        "chave_invalida": "Gere uma nova chave e atualize o .env.",
+        "limite_taxa": "Aguarde um pouco antes de tentar de novo.",
+        "modelo_inexistente": "Confira o nome do modelo no .env.",
+    }
+
+    def icone_de(p):
+        """✅ respondeu · ⚙️ configurado mas não testado · ⛔ falhou ou incompleto."""
+        if not p["available"]:
+            return "⛔"
+        if p.get("verified") is True:
+            return "✅"
+        if p.get("verified") is False:
+            return "⛔"
+        return "⚙️"
+
+    @st.cache_resource(show_spinner="Testando os motores de LLM...")
+    def motores_testados():
+        """
+        Pede à API um teste real de cada motor, uma vez por processo.
+
+        Feito no carregamento para que o seletor já ofereça só o que funciona —
+        exigir um clique antes significaria oferecer motores quebrados na
+        primeira tela, que é justamente o que se quer evitar.
+        """
+        try:
+            r = requests.get(f"{API_URL}/providers", params={"probe": "true"}, timeout=180)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        return None
+
+    info_providers = motores_testados()
+
+    if info_providers:
+        todos = info_providers["providers"]
+        rotulos = {p["provider"]: p["label"] for p in todos}
+        por_nome = {p["provider"]: p for p in todos}
+        funcionais = [p["provider"] for p in todos if p.get("verified") is True]
+        quebrados = [p["provider"] for p in todos if p.get("verified") is not True]
+
+        mostrar_todos = st.checkbox(
+            "Mostrar motores indisponíveis",
+            value=not funcionais,
+            help="Por padrão o seletor lista apenas os motores que responderam ao teste.",
+        )
+        ofertados = list(rotulos.keys()) if mostrar_todos else funcionais
+
+        if not ofertados:
+            st.error("Nenhum motor de LLM está funcionando.")
+            for p in todos:
+                st.write(f"{icone_de(p)} **{p['provider']}** — {p['reason']}")
+                if p.get("categoria") in SUGESTOES:
+                    st.caption(SUGESTOES[p["categoria"]])
+            st.stop()
+
+        padrao = info_providers.get("default", ofertados[0])
+        escolhido = st.selectbox(
+            "🧠 Motor de LLM",
+            options=ofertados,
+            index=ofertados.index(padrao) if padrao in ofertados else 0,
+            format_func=lambda p: rotulos[p],
+            help="Ollama roda local, sem custo. Gemini, Grok e Groq são APIs externas.",
+        )
+        st.session_state.provider = escolhido
+
+        status_escolhido = por_nome[escolhido]
+
+        # No Ollama a máquina sabe quais modelos existem: oferecer a lista
+        # evita errar o nome e só descobrir na primeira pergunta.
+        locais = info_providers.get("ollama_models", []) if escolhido == "ollama" else []
+        padrao_modelo = status_escolhido["model"]
+        if locais:
+            if padrao_modelo not in locais:
+                locais = [padrao_modelo] + locais
+            modelo = st.selectbox(
+                "Modelo",
+                options=locais,
+                index=locais.index(padrao_modelo),
+                help="Modelos instalados no Ollama desta máquina.",
+            )
+        else:
+            modelo = st.text_input("Modelo", value=padrao_modelo)
+        st.session_state.modelo = modelo
+
+        if status_escolhido.get("verified") is True:
+            st.success("Respondeu ao teste")
+        elif not status_escolhido["available"]:
+            st.error(f"Indisponível: {status_escolhido['reason']}")
+        else:
+            st.error(status_escolhido["reason"])
+            if status_escolhido.get("categoria") in SUGESTOES:
+                st.caption(SUGESTOES[status_escolhido["categoria"]])
+
+        if quebrados:
+            st.caption(f"Fora do seletor: {', '.join(quebrados)}")
+
+        if st.button("🔄 Testar motores de novo", use_container_width=True):
+            motores_testados.clear()
+            st.rerun()
+
+        with st.expander("Status de todos os motores"):
+            for p in todos:
+                st.write(f"{icone_de(p)} **{p['provider']}** — `{p['model']}` — {p['reason']}")
+                if p.get("detail"):
+                    st.caption(p["detail"][:180])
+                if p.get("categoria") in SUGESTOES:
+                    st.caption(SUGESTOES[p["categoria"]])
+    else:
+        st.session_state.provider = None
+        st.warning("API offline: não foi possível listar os motores de LLM.")
+
+    st.caption("Embeddings permanecem locais (Ollama) em qualquer provider.")
+    st.divider()
+
     st.info(f"Sessão ID: `{st.session_state.session_id}`")
     
     if st.button("Limpar Histórico de Chat"):
@@ -174,65 +296,78 @@ if prompt := st.chat_input("O que deseja investigar hoje?"):
 
     # Processamento do Agente
     with st.chat_message("assistant"):
+        data = None  # preenchido dentro do status, consumido fora dele
         with st.status("🕵️ Investigando...", expanded=True) as status:
             try:
                 response = requests.post(
                     f"{API_URL}/investigate",
                     json={
                         "question": prompt,
-                        "session_id": st.session_state.session_id
+                        "session_id": st.session_state.session_id,
+                        "provider": st.session_state.get("provider"),
+                        "model": st.session_state.get("modelo")
                     },
-                    timeout=60
+                    timeout=120
                 )
                 
                 if response.status_code == 200:
                     data = response.json()
                     
-                    # Exibe os passos de raciocínio
+                    # Exibe os passos de raciocínio.
+                    # Sem st.expander aqui: já estamos dentro de st.status, e o
+                    # Streamlit proíbe expander aninhado em expander.
                     for step in data.get("reasoning_steps", []):
                         st.write(f"⚙️ Usando: **{step['action']}**")
-                        with st.expander("Ver detalhes do raciocínio"):
+                        with st.container(border=True):
                             st.markdown(f"**Thought:** {step.get('thought', 'Processando...')}")
                             st.markdown(f"**Input:** `{step['action_input']}`")
                             st.markdown(f"<div class='observation-box'>{step['observation']}</div>", unsafe_allow_html=True)
                     
                     status.update(label="✅ Investigação concluída!", state="complete", expanded=False)
-                    
-                    # --- GUARDRAIL: detecta sinal de busca web ---
-                    WEB_SIGNAL = "__SOLICITAR_BUSCA_WEB__"
-                    needs_web = WEB_SIGNAL in data["answer"]
-                    
-                    # Remove o token interno antes de exibir ao usuário
-                    clean_answer = data["answer"].replace(WEB_SIGNAL, "").strip()
-                    
-                    if needs_web:
-                        # Exibe mensagem limpa sem o token técnico
-                        st.markdown(f"""
+
+                else:
+                    st.error(f"Erro na API: {response.status_code} — {response.text[:300]}")
+                    status.update(label="❌ Erro na investigação", state="error")
+
+            except Exception as e:
+                st.error(f"Falha ao processar a investigação: {e}")
+                status.update(label="❌ Erro", state="error")
+
+        # A resposta é renderizada FORA do st.status: o status acabou de ser
+        # recolhido (expanded=False) e qualquer coisa escrita dentro dele
+        # ficaria invisível para o usuário.
+        if data:
+            # --- GUARDRAIL: detecta sinal de busca web ---
+            WEB_SIGNAL = "__SOLICITAR_BUSCA_WEB__"
+            needs_web = WEB_SIGNAL in data["answer"]
+
+            # Remove o token interno antes de exibir ao usuário
+            clean_answer = data["answer"].replace(WEB_SIGNAL, "").strip()
+
+            if needs_web:
+                # Exibe mensagem limpa sem o token técnico
+                st.markdown(f"""
 <div class='not-found-warning'>
 🔍 {clean_answer}
 </div>
 """, unsafe_allow_html=True)
-                        st.session_state.pending_web_permission = True
-                        st.session_state.last_question = st.session_state.get("last_question", prompt)
-                    else:
-                        # Exibe resposta normal
-                        st.markdown(clean_answer)
-                    
-                    # Salva no histórico
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": clean_answer,
-                        "steps": data.get("reasoning_steps", []),
-                        "needs_web": needs_web
-                    })
-                    
-                else:
-                    st.error(f"Erro na API: {response.status_code}")
-                    status.update(label="❌ Erro na investigação", state="error")
-            
-            except Exception as e:
-                st.error(f"Erro ao conectar na API: {e}")
-                status.update(label="❌ Erro de Conexão", state="error")
+                st.session_state.pending_web_permission = True
+                st.session_state.last_question = st.session_state.get("last_question", prompt)
+            else:
+                # Exibe resposta normal
+                st.markdown(clean_answer)
+
+            # Rodapé de rastreabilidade: qual motor produziu esta resposta
+            if data.get("provider"):
+                st.caption(f"🧠 {data['provider']} · `{data.get('model', '')}`")
+
+            # Salva no histórico
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": clean_answer,
+                "steps": data.get("reasoning_steps", []),
+                "needs_web": needs_web
+            })
 
 # --- Painel de Permissão de Busca Web ---
 if st.session_state.get("pending_web_permission", False):
@@ -281,9 +416,11 @@ if "automated_prompt" in st.session_state and st.session_state.automated_prompt:
                     f"{API_URL}/investigate",
                     json={
                         "question": p,
-                        "session_id": st.session_state.session_id
+                        "session_id": st.session_state.session_id,
+                        "provider": st.session_state.get("provider"),
+                        "model": st.session_state.get("modelo")
                     },
-                    timeout=60
+                    timeout=120
                 )
                 if response.status_code == 200:
                     data = response.json()

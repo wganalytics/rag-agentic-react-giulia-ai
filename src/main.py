@@ -10,11 +10,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from .core.agent_engine import get_engine
+from .core.llm_factory import (
+    LLMConfigError,
+    PROVIDERS,
+    describe_provider,
+    list_provider_status,
+    modelos_ollama,
+    probe_provider,
+    resolve_provider,
+)
 from .core.tools import list_documents, remove_document, process_pdf, UPLOADS_DIR
 from .api.schemas import (
-    InvestigateRequest, 
-    InvestigateResponse, 
+    InvestigateRequest,
+    InvestigateResponse,
     HealthResponse,
+    ProvidersResponse,
     ReasoningStep
 )
 
@@ -57,8 +67,34 @@ async def root():
     return {
         "status": "ready",
         "engine": "AgenticEngine",
-        "model": engine.llm.model,
+        "model": f"{engine.provider}/{engine.model_name}",
         "tools": [t.name for t in engine.tools]
+    }
+
+
+@app.get("/providers", response_model=ProvidersResponse, tags=["LLM"])
+async def providers(probe: bool = False):
+    """
+    Lista os providers de LLM e o estado de cada um.
+
+    Por padrão devolve só o estado de configuração (rápido, sem rede). Com
+    `?probe=true` faz uma chamada real a cada provider — é a única forma de
+    detectar conta sem crédito ou chave revogada.
+    """
+    if probe:
+        status = []
+        for nome in PROVIDERS:
+            try:
+                status.append(probe_provider(nome))
+            except LLMConfigError:
+                status.append(describe_provider(nome))
+    else:
+        status = list_provider_status()
+
+    return {
+        "default": resolve_provider(),
+        "providers": [vars(s) for s in status],
+        "ollama_models": modelos_ollama(),
     }
 
 @app.post("/upload_pdf", tags=["Document Management"])
@@ -98,9 +134,18 @@ async def investigate(request: InvestigateRequest):
     """
     if engine is None:
         raise HTTPException(status_code=503, detail="Agent engine not initialized")
-    
+
+    # Sem provider no request, usa o motor do startup (padrão do .env).
+    # Com provider, resolve o motor daquela combinação — cacheado por chave.
     try:
-        result = engine.investigate(
+        alvo = engine if not (request.provider or request.model) else get_engine(
+            provider=request.provider, model=request.model
+        )
+    except LLMConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        result = alvo.investigate(
             question=request.question,
             session_id=request.session_id
         )

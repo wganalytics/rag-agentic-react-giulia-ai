@@ -1,148 +1,228 @@
-# 🕵️ RAG Agêntico Investigativo com Loop ReAct e Guardrail pré-LLM (PRJ-03)
+# PRJ-03 — Agentic RAG (Investigador Autônomo)
 
-[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.109%2B-009688.svg?style=flat&logo=FastAPI&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Redis](https://img.shields.io/badge/Redis-7.2-red.svg?style=flat&logo=Redis&logoColor=white)](https://redis.io/)
-[![ChromaDB](https://img.shields.io/badge/ChromaDB-0.4%2B-orange.svg)](https://www.trychroma.com/)
-[![LangChain](https://img.shields.io/badge/LangChain-0.1%2B-1C3C3C.svg)](https://www.langchain.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Terceiro projeto de uma progressão de oito técnicas de RAG (PRJ-01 a PRJ-08, orquestradas por um nono projeto de deploy): um agente que decide sozinho **quais ferramentas usar e quando parar**, em vez de seguir um pipeline fixo de recuperação e geração.
 
-Um **agente investigativo autônomo** baseado no padrão **ReAct (Reason + Act)** integrado à arquitetura **Giulia AI**. O motor decide dinamicamente a cada iteração qual ferramenta utilizar (`doc_retriever` ou `web_search`) para solucionar questionamentos factuais complexos, contando com um **Guardrail Python pré-LLM** ultra-eficiente que bloqueia alucinações antes mesmo do consumo de tokens do modelo.
+## Visão geral
 
----
+Os dois primeiros projetos da série (RAG vanilla e RAG com memória) seguem um fluxo determinístico: recebe a pergunta, busca no banco vetorial, gera a resposta. O PRJ-03 introduz o padrão **ReAct** (Reasoning + Acting, Yao et al. 2022): o modelo de linguagem entra num loop de raciocínio explícito —
 
-## 🏗️ Visão Geral da Arquitetura
+```
+Thought: preciso decidir o que fazer
+Action: nome da ferramenta
+Action Input: argumento da ferramenta
+Observation: resultado da ferramenta
+```
 
-O sistema é estruturado sobre o padrão ReAct com injeção automática de histórico distribuído no Redis e isolamento rígido por sessão de usuário. O diagrama abaixo representa o fluxo de dados em altíssima definição (3x):
+repetido até que o próprio modelo decida que tem informação suficiente para responder. A diferença central em relação ao RAG tradicional é que a busca no vector store deixa de ser uma etapa obrigatória do pipeline e passa a ser **uma opção entre várias** que o agente escolhe, junto com calculadora e busca web — e ele pode encadear mais de uma, ou nenhuma, dependendo da pergunta.
 
-![Arquitetura de Dados e Controle](assets/diagram.svg)
+Isso introduz um problema que os projetos anteriores não tinham: o agente pode alucinar uma resposta a partir de documentos que não contêm a informação pedida, ou entrar em loop tentando formatar uma ação que o modelo não sabe expressar direito. As duas seções de guardrail e de sensibilidade do prompt abaixo existem por causa disso.
 
-### O Loop de Controle ReAct & Guardrail
+## Funcionalidades
+
+- **Loop ReAct real** via `langchain.agents.create_react_agent` + `AgentExecutor`, com prompt customizado e `max_iterations=5`.
+- **Três ferramentas** que o agente escolhe autonomamente:
+  - `doc_retriever` — busca por similaridade (MMR, `k=4`, `fetch_k=8`) no ChromaDB local.
+  - `math_tool` — calculadora determinística via `numexpr` (sanitiza a expressão antes de avaliar).
+  - `web_search` — busca no DuckDuckGo (`DuckDuckGoSearchResults`), usada **somente** com permissão explícita do usuário.
+- **Guardrail em Python antes de qualquer chamada ao LLM**: verifica se algum token significativo da pergunta aparece literalmente nos trechos recuperados do vector store. Se não aparecer, a investigação é bloqueada ali mesmo — sem gastar uma chamada de LLM — e a resposta carrega um sinal interno (`__SOLICITAR_BUSCA_WEB__`) que o frontend traduz num pedido de permissão para buscar na web.
+- **Contrato de sinal backend↔frontend**: o backend nunca decide sozinho ir para a internet. Ele devolve o sinal, o Streamlit renderiza um botão "Sim, pesquise" / "Não, apenas encerre", e só um clique explícito gera a pergunta reformulada que libera `web_search`.
+- **Memória de sessão via Redis** (`RunnableWithMessageHistory` + `RedisChatMessageHistory`), por `session_id`.
+- **Suporte multi-provider de LLM** (Ollama, Gemini, Grok, Groq) — ver seção própria abaixo.
+- **Gestão de documentos**: upload de PDF (`PyMuPDFLoader` + `RecursiveCharacterTextSplitter`, chunks de 1000/100), listagem e remoção, tudo via API e refletido na sidebar do Streamlit.
+- **Trace de raciocínio exposto na API e na UI**: cada resposta inclui a lista de passos (`thought`, `action`, `action_input`, `observation`) e a lista de ferramentas usadas.
+
+## Arquitetura
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Usuário
-    participant UI as Streamlit UI
-    participant API as FastAPI Backend
-    participant Guard as Guardrail pré-LLM (Python)
-    participant Agent as ReAct AgentExecutor
-    participant Tools as Ferramentas (ChromaDB/DDG)
-    participant LLM as ChatOllama (llama3.2)
+flowchart TD
+    U[Usuário] -->|pergunta| API["POST /investigate<br/>(FastAPI)"]
 
-    User->>UI: Pergunta + session_id
-    UI->>API: POST /investigate
-    API->>Guard: _check_term_in_docs(query)
-    
-    alt Tokens NÃO encontrados nos documentos
-        Guard-->>API: Retorna WEB_SIGNAL (__SOLICITAR_BUSCA_WEB__)
-        API-->>UI: Exibe Alerta + Botão "Autorizar Pesquisa na Web"
-    else Tokens presentes nos documentos OU Busca Web já autorizada
-        Guard->>Agent: Inicializa AgentExecutor
-        loop ReAct Thought-Action Loop (max_iterations=5)
-            Agent->>LLM: Thought (Gera Raciocínio)
-            LLM-->>Agent: Action (Decide qual ferramenta chamar)
-            Agent->>Tools: Executa Tool (doc_retriever OR web_search OR math_tool)
-            Tools-->>Agent: Observation (Retorna resultado físico)
-        end
-        Agent-->>API: Final Answer (Resposta Conclusiva + Fontes 📚)
-        API-->>UI: Renderiza Resposta e Steps de Raciocínio
+    API --> GR{"Guardrail Python<br/>termo aparece nos docs<br/>recuperados via MMR?"}
+
+    GR -- não --> BLOQ["Bloqueia SEM chamar o LLM<br/>devolve __SOLICITAR_BUSCA_WEB__"]
+    BLOQ --> UIWEB["Frontend pede permissão<br/>de busca web ao usuário"]
+    UIWEB -->|permissão concedida| API
+
+    GR -- sim --> AG["AgentExecutor (ReAct)<br/>create_react_agent"]
+
+    subgraph LOOP[" Loop de raciocínio "]
+        direction TB
+        T["Thought"] --> A["Action: escolhe uma tool"]
+        A --> O["Observation: resultado da tool"]
+        O -->|"ainda falta informação"| T
     end
+
+    AG <--> LOOP
+    LOOP -->|doc_retriever| CHROMA[(ChromaDB<br/>vector store)]
+    LOOP -->|math_tool| NUMEXPR[numexpr]
+    LOOP -->|web_search| DDG[DuckDuckGo]
+
+    LOOP -->|"Final Answer:"| RESP["Resposta + trace<br/>+ tools_used"]
+    AG -->|"lê / grava"| REDIS[(Redis<br/>histórico por session_id)]
+    RESP --> U
 ```
 
----
+O guardrail roda **antes** de instanciar qualquer chamada ao LLM: é um filtro em Python puro sobre o resultado da busca vetorial, não uma etapa do agente. Isso significa que uma pergunta claramente fora da base é rejeitada sem custo de token — o agente ReAct só é acionado depois que o guardrail confirma que há pelo menos um termo significativo da pergunta presente nos documentos recuperados.
 
-## 📝 Especificações de Design e Camadas
+## Stack tecnológica
 
-O ecossistema divide as responsabilidades de forma clara e isolada:
+| Componente          | Tecnologia                                              | Papel                                                            |
+|----------------------|----------------------------------------------------------|-------------------------------------------------------------------|
+| Orquestração do agente | LangChain (`create_react_agent`, `AgentExecutor`)      | Loop ReAct, parsing de Thought/Action/Observation, controle de iterações |
+| LLM de raciocínio    | Ollama / Google Gemini / xAI Grok / Groq Cloud           | Motor plugável — ver seção multi-provider                        |
+| Embeddings           | Ollama (`nomic-embed-text`, configurável)                 | Sempre local, independente do LLM de raciocínio                   |
+| Vector store         | ChromaDB (persistido em disco)                            | Armazena e recupera os chunks dos PDFs indexados                  |
+| Extração de PDF      | PyMuPDF (`PyMuPDFLoader`)                                  | Parsing de documentos, com página de origem preservada em metadado |
+| Calculadora          | `numexpr`                                                  | Avaliação segura de expressões numéricas                          |
+| Busca web            | `DuckDuckGoSearchResults` (langchain-community)            | Ferramenta condicionada a permissão explícita                     |
+| Memória de sessão    | Redis (`RedisChatMessageHistory`, `RunnableWithMessageHistory`) | Histórico de conversa por `session_id`                       |
+| API                  | FastAPI + Uvicorn                                          | Endpoint `/investigate` e gestão de documentos                    |
+| Frontend             | Streamlit                                                  | Chat com renderização passo a passo do raciocínio do agente       |
+| Testes               | pytest                                                     | 59 testes cobrindo agente, fábrica de LLM e diagnóstico de providers |
 
-| Camada | Módulo / Arquivo | Responsabilidade Técnica |
-| :--- | :--- | :--- |
-| **API** | `src/main.py`<br>`src/api/schemas.py` | Exposição de endpoints HTTP REST (`/investigate`, `/upload_pdf`, `/health`) e validação de schemas Pydantic. |
-| **Orquestração** | `src/core/agent_engine.py` | Singleton da `AgenticEngine`. Gerencia o ciclo de vida do `AgentExecutor`, o Guardrail pré-LLM (Python), e injeta o histórico do Redis via `RunnableWithMessageHistory`. |
-| **Ferramentas** | `src/core/tools.py` | Definição das LangChain Tools: `doc_retriever` (MMR no ChromaDB), `web_search` (DuckDuckGoSearchResults com links) e `math_tool` (NumExpr seguro). |
-| **Interface** | `frontend/streamlit_app.py` | UI conversacional de alta fidelidade com exibição de steps de raciocínio intermediários expandidos e persistência visual de sessões. |
+## Suporte multi-provider de LLM
 
----
+O LLM de raciocínio é plugável entre quatro providers, resolvidos por `src/core/llm_factory.py` — o único módulo do projeto que sabe instanciar cada SDK concreto. Os **embeddings continuam sempre locais no Ollama**, em qualquer configuração: trocar o modelo de embedding invalidaria o ChromaDB já indexado, obrigando a reprocessar todos os PDFs. Só o LLM de raciocínio é intercambiável.
 
-## 🧪 Suíte de Testes Hermética (TDD)
+| Provider | Classe (LangChain)        | Variável de chave | Custo     |
+|----------|----------------------------|--------------------|-----------|
+| `ollama` | `ChatOllama` (local)       | —                  | zero      |
+| `gemini` | `ChatGoogleGenerativeAI`   | `GEMINI_API_KEY` (ou `GOOGLE_API_KEY`) | por token |
+| `grok`   | `ChatXAI` (xAI)            | `XAI_API_KEY`      | por token |
+| `groq`   | `ChatGroq` (Groq Cloud)    | `GROQ_API_KEY`     | por token |
 
-A integridade do projeto é assegurada por testes herméticos que rodam de forma ultrarrápida (0.09s) mockando no nível de `sys.modules` para prevenir conflitos de gRPC no macOS e chamadas bloqueantes de subprocessos.
+> **`grok` ≠ `groq`.** xAI Grok e Groq Cloud são empresas diferentes, separadas por uma letra no nome. Cada uma tem SDK e chave de API próprios — `GROQ_API_KEY` **não** habilita o Grok, e há teste automatizado (`test_grok_e_groq_nao_se_misturam`, `test_chave_do_groq_nao_habilita_o_grok`) travando essa confusão.
 
-### Executando os Testes localmente:
+### Como trocar de motor
+
+**Pelo `.env`** (padrão do sistema quando nenhum provider é informado na requisição):
+
 ```bash
-pytest tests/test_agent.py -v
+LLM_PROVIDER=groq
+GROQ_API_KEY=sua-chave
+GROQ_MODEL_NAME=llama-3.3-70b-versatile
 ```
 
-### Resultados Obtidos:
+**Pela API**, por requisição — `provider` e `model` são opcionais em `InvestigateRequest`:
+
 ```bash
-============================== 6 passed in 0.09s ===============================
-tests/test_agent.py::test_singleton_pattern PASSED                       [ 16%]
-tests/test_agent.py::test_web_signal_constant PASSED                     [ 33%]
-tests/test_agent.py::test_guardrail_blocks_unknown PASSED                [ 50%]
-tests/test_agent.py::test_guardrail_bypassed_web_permission PASSED       [ 66%]
-tests/test_agent.py::test_react_tool_selection PASSED                    [ 83%]
-tests/test_agent.py::test_max_iterations_respected PASSED                [100%]
+curl -X POST localhost:8002/investigate -H "Content-Type: application/json" \
+  -d '{"question":"...","session_id":"s1","provider":"groq"}'
+
+curl "localhost:8002/providers"              # estado de configuração de todos os providers
+curl "localhost:8002/providers?probe=true"   # faz uma chamada real a cada um
 ```
 
----
+Omitir `provider` usa o padrão do `.env`. Um provider desconhecido devolve **400** (`LLMConfigError`).
 
-## 🚀 Como Executar Localmente
+**Pela interface**: a barra lateral do Streamlit testa os motores ao abrir (`?probe=true`) e lista, por padrão, **apenas os que responderam** — um motor sem crédito ou com chave revogada não aparece na lista principal, e some para a legenda "Fora do seletor". A caixa "Mostrar motores indisponíveis" revela todos, e "🔄 Testar motores de novo" refaz o teste. A escolha de provider/modelo viaja junto de cada pergunta, e a resposta traz no rodapé qual motor a produziu.
 
-### 1. Requisitos Prévios
-* **Docker e Docker-Compose**
-* **Python 3.12+**
-* **Ollama** rodando localmente
+Cada combinação `(provider, model)` tem seu próprio `AgenticEngine`, criado sob demanda e cacheado num dicionário de instâncias — montar o agente ReAct (prompt, tools, `AgentExecutor`) é caro o bastante para não refazer a cada requisição, e trocar de provider não descarta o motor anterior: ele continua disponível se o usuário voltar a escolhê-lo.
 
-### 2. Inicializar Infraestrutura com Docker
-Suba a infraestrutura do Redis de forma isolada na porta `6380` (configuração do ecossistema):
-```bash
-# Crie e inicie os containers
-docker compose up -d
+### Diagnóstico: configurado ≠ verificado
+
+Ter o SDK instalado e a chave presente no `.env` **não** significa que o provider responde de verdade. A conta pode estar sem crédito, a chave pode ter sido revogada, o modelo pode não existir para aquele plano. Por isso `ProviderStatus` distingue dois eixos independentes:
+
+- `available` — a *configuração* está completa (SDK importável + chave presente).
+- `verified` — `None` nunca testado, `True` respondeu a uma chamada real, `False` falhou.
+
+| Ícone (UI) | Significado |
+|---|---|
+| ⛔ | Configuração incompleta, ou falhou numa chamada real |
+| ⚙️ | Configurado, mas ninguém provou que responde |
+| ✅ | Respondeu a uma chamada real |
+
+O módulo também classifica a causa da falha (`classificar_falha`) em categorias acionáveis — sem crédito, chave inválida, limite de taxa, modelo inexistente, rede — a partir de assinaturas de texto na exceção, com ordem de prioridade deliberada: um 429 do Gemini (`resource_exhausted`) é checado antes de "sem crédito" porque o Google devolve o mesmo texto de billing para um simples limite por minuto do free tier; e "sem crédito" é checado antes de "chave inválida" porque a xAI devolve falta de crédito como `403 permission-denied`, indistinguível textualmente de uma chave revogada. Falhas de infraestrutura (Redis fora do ar, erro no ChromaDB) são explicitamente **não atribuídas** ao provider — `falha_e_do_provider()` percorre a cadeia de causas da exceção para não reportar "provider falhou" quando o problema é um container caído.
+
+### A lição: o prompt ReAct é sensível ao modelo
+
+Testando o Groq de verdade nesta sessão, apareceu um bug real: o `llama-3.3-70b-versatile` recuperava o documento certo, mas em vez de emitir `Final Answer:` escrevia `Action: None` — uma ação vazia que o `AgentExecutor` não sabe interpretar, e ficava tentando de novo até estourar `max_iterations=5` (loop, resposta genérica de erro). O prompt ReAct padrão nunca proibia explicitamente uma ação vazia; funcionava com Ollama por sorte de comportamento do modelo, não por garantia do prompt.
+
+A correção foi adicionar regras explícitas ao `AGENT_SYSTEM_PROMPT` (`src/core/agent_engine.py`): proibir literalmente `Action: None`/`Action: nenhuma`, exigir que uma ação vazia vire `Final Answer:` na mesma resposta, e proibir repetir o mesmo `Thought` duas vezes seguidas. Como efeito colateral, o Ollama também ficou consideravelmente mais rápido (medido: 20,9s → 3,6s) por parar de desperdiçar iterações no mesmo bug de formato — o problema não era exclusivo do Groq, só ficava menos visível com o Ollama.
+
+A lição de engenharia: **um prompt ReAct que funciona com um modelo não está testado até rodar com outro.** Modelos diferentes cumprem o mesmo contrato textual de formas diferentes, e a única forma de descobrir isso é testar com o provider de verdade — não em mock.
+
+## Estrutura de pastas
+
+```
+PRJ-03_Agentic_RAG/
+├── src/
+│   ├── main.py                  # FastAPI: /investigate, /providers, /upload_pdf, /list_docs, /remove_doc
+│   ├── api/
+│   │   └── schemas.py           # Pydantic: InvestigateRequest/Response, ProviderStatus, ReasoningStep
+│   └── core/
+│       ├── agent_engine.py      # AgenticEngine: prompt ReAct, guardrail, loop, memória Redis
+│       ├── llm_factory.py       # Fábrica multi-provider (ollama/gemini/grok/groq) + diagnóstico
+│       └── tools.py             # doc_retriever, math_tool, web_search + gestão de documentos
+├── frontend/
+│   └── streamlit_app.py         # Chat com trace de raciocínio, seletor de provider, upload de PDF
+├── scripts/
+│   └── verify_llm.py            # Diagnóstico standalone dos providers (configuração e/ou chamada real)
+├── tests/
+│   ├── test_agent.py            # Loop ReAct, guardrail, singleton por (provider, model)
+│   ├── test_llm_factory.py      # Resolução de provider/modelo/chave, isolamento grok↔groq
+│   └── test_provider_health.py  # Classificação de falhas, atribuição de infra vs. provider
+├── data/
+│   ├── vector_db/                # Persistência do ChromaDB
+│   └── uploads/                  # PDFs enviados via /upload_pdf
+├── requirements.txt
+└── .env                          # LLM_PROVIDER, chaves de API, REDIS_URL, EMBEDDING_MODEL_NAME (não versionado)
 ```
 
-### 3. Configurar Variáveis de Ambiente
-Copie o template e ajuste conforme necessário:
-```bash
-cp .env.template .env
-```
+## Como rodar
 
-### 4. Instalar Dependências e Executar o Backend
-```bash
-# Cria e ativa ambiente virtual
-python3 -m venv .venv
-source .venv/bin/activate
+### Local, standalone
 
-# Instala dependências
+```bash
 pip install -r requirements.txt
 
-# Executa FastAPI Backend
-uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+# Redis para memória de sessão
+docker run -d -p 6380:6379 --name redis-prj03 redis:7-alpine
+
+# Ollama precisa estar rodando no host (localhost:11434) para embeddings,
+# e para o provider ollama se for o LLM_PROVIDER escolhido.
+
+python3 -m uvicorn src.main:app --port 8002        # API
+python3 -m streamlit run frontend/streamlit_app.py  # UI, lê API_URL (default http://localhost:8002)
 ```
 
-### 5. Executar o Streamlit Frontend
-Em um novo terminal com a `.venv` ativa:
+### Via Docker / PRJ-09
+
+Este projeto também roda como parte da orquestração local do ecossistema RAG, definida em `dev/rag/PRJ-09_Deploy_Cloud/docker-compose.yml`:
+
 ```bash
-streamlit run frontend/streamlit_app.py
+cd ../PRJ-09_Deploy_Cloud
+docker compose up -d prj-03-api prj-03-ui redis
 ```
 
----
+Nesse modo: o Ollama roda no host e é alcançado via `host.docker.internal` (não sobe em container — evitar redownload de dezenas de GB de modelos); o código não é copiado para a imagem, a raiz do monorepo é montada em `/app`; a API fica em `localhost:8003` e a UI em `localhost:8503`; o `REDIS_URL` é sobrescrito para `redis://redis:6379` (rede interna do compose) em vez do `localhost:6380` usado no modo standalone.
 
-## 📊 Métricas Reais do Projeto
+## Referência da API
 
-* **Arquivos Python públicos:** `13`
-* **Linhas de Código Totais:** `965`
-* **Testes unitários Pytest:** `6 passed em 0.09s`
-* **Limitação de loop:** `max_iterations = 5` (100% de segurança contra estouro de contexto)
-* **Status do Épico Jira:** `GARE-46 (Concluído)`
+| Método | Endpoint | Descrição |
+|---|---|---|
+| `GET` | `/` | Health check — status do engine, provider/modelo ativo, ferramentas carregadas |
+| `GET` | `/providers?probe={bool}` | Estado de todos os providers. Sem `probe`, só configuração (rápido); com `probe=true`, chamada real a cada um |
+| `POST` | `/investigate` | Envia a pergunta ao agente. Body: `question`, `session_id`, `provider` (opcional), `model` (opcional) |
+| `POST` | `/upload_pdf` | Upload de um PDF, processado e indexado no ChromaDB |
+| `GET` | `/list_docs` | Lista os nomes dos documentos já indexados |
+| `DELETE` | `/remove_doc?filename=` | Remove um documento do índice e do disco |
 
----
+A resposta de `/investigate` (`InvestigateResponse`) inclui `answer`, `provider`, `model`, `reasoning_steps` (lista de `thought`/`action`/`action_input`/`observation`) e `tools_used`.
 
-## 🛡️ Prova de Isolamento e Guardrail contra Alucinações
+## Testes
 
-O **Guardrail pré-LLM** intercepta a pergunta do usuário e extrai as palavras significativas relevantes (removendo as stopwords do Português). Ele então realiza uma busca veloz no ChromaDB por similaridade semântica (MMR) e cruza as palavras:
-* Se nenhuma palavra significativa for encontrada no contexto dos documentos recuperados, o LLM **sequer é invocado**, economizando tokens e eliminando a possibilidade de alucinação de dados factuais.
-* O sistema devolve o `WEB_SIGNAL`, oferecendo à interface Streamlit a oportunidade de pedir autorização explícita do usuário para acionar a DuckDuckGo Search externa.
+```bash
+python3 -m pytest tests/ -q
+```
 
----
-*Desenvolvido em conformidade com as diretrizes de governança da Giulia AI. 100% Hermético. 100% Local-first.*
+59 testes passando, cobrindo três frentes: o loop ReAct e o guardrail (`test_agent.py` — singleton por combinação provider+modelo, bloqueio de termo ausente, seleção de ferramenta, respeito a `max_iterations`), a fábrica de LLM (`test_llm_factory.py` — resolução de provider/modelo/chave, isolamento explícito entre Grok e Groq) e o diagnóstico de saúde dos providers (`test_provider_health.py` — classificação de categorias de falha, não atribuição de erros de infraestrutura ao provider, comportamento do probe do Ollama sem carregar o modelo).
+
+## Limitações conhecidas / decisões de engenharia
+
+- **O guardrail é léxico, não semântico.** Ele verifica se um token da pergunta aparece literalmente no texto recuperado — não entende sinônimos nem paráfrases. Isso é uma escolha deliberada de custo: rodar antes do LLM significa que não pode depender do LLM para julgar relevância, senão perderia a própria razão de existir (evitar gastar uma chamada).
+- **Permissão de busca web por frase, não por estado estruturado.** A detecção de "o usuário concedeu permissão" em `agent_engine.py` é uma lista de frases (`"sim"`, `"pode pesquisar"`, `"ok"`, etc.) checada como substring na pergunta — funciona para o fluxo guiado pela UI (que gera a frase automaticamente), mas é frágil a uma pergunta digitada livremente que comece com "sim" por outro motivo.
+- **`max_iterations=5` é um limite fixo**, não adaptativo por complexidade da pergunta. Perguntas que legitimamente precisassem de mais de 5 ciclos de raciocínio seriam cortadas.
+- **A extração de query em `doc_retriever` tenta ser robusta a qualquer formato que o LLM envie** (string, dict com `query`/`value`/`action_input`) porque providers diferentes já demonstraram, na prática, formatar `Action Input` de formas diferentes — outro sintoma da mesma sensibilidade a modelo descrita acima.
+- **Prompt ReAct testado, mas não imune a novos modelos.** As regras adicionadas corrigem o padrão de falha observado no Groq; um provider ou modelo futuro pode expor um padrão diferente que o prompt atual não cobre. Não há validação sintática do output do LLM antes do parser do LangChain — o `handle_parsing_errors=True` absorve erros de formato, mas não previne loops de conteúdo semanticamente vazio.
+- **Sem cache de resposta.** Duas perguntas idênticas na mesma sessão disparam o loop ReAct inteiro de novo; não há memoização por pergunta, só o histórico de conversa no Redis.
