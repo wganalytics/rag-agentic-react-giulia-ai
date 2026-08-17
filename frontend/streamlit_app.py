@@ -264,7 +264,7 @@ with st.sidebar:
     st.markdown("### 🛠️ Ferramentas Ativas")
     st.markdown("- 📚 **doc_retriever**: Busca no VectorDB")
     st.markdown("- 🧮 **math_tool**: Calculadora NumExpr")
-    st.markdown("- 🌐 **web_search**: Busca externa (Tavily)")
+    st.markdown("- 🌐 **web_search**: Busca externa (DuckDuckGo)")
 
 # Área Principal
 st.title("🔍 Investigador Autônomo")
